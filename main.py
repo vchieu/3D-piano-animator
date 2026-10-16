@@ -23,6 +23,7 @@ Falling-notes controls
     O               open another MIDI file (or drag & drop a file onto the window)
     H               show / hide the hand skeleton
     F               show / hide finger numbers on the falling notes
+    S               show / hide the scrolling score strip
     Click the top bar to seek.  Esc goes back to the menu.
 
 The editor's controls are listed in editor.py (and shown in the editor itself).
@@ -48,6 +49,7 @@ from common import (blit_shadowed, BAR_BG, BAR_FILL, BAR_LINE, BG, FELT_H, FPS, 
 import pianist as pianists
 from hands import HandAnimator, draw_hands, pair_hands
 from midi_loader import LEFT, RIGHT, load_song
+from score import SCORE_STRIP_H, draw_score, layout_score_rect
 from version import VERSION
 
 DEFAULT_WINDOW_SECS = 3.0    # how many seconds of upcoming notes fit above the keys
@@ -71,6 +73,8 @@ class Visualizer(Transport):
         self.hands = {}
         self.show_hands = True
         self.show_fingers = True
+        self.show_score = True
+        self.score_rect = pygame.Rect(0, 0, 0, 0)
         self.layout(screen.get_size())
         if song:
             self.set_song(song)
@@ -91,9 +95,23 @@ class Visualizer(Transport):
 
     def layout(self, size):
         w, h = size
-        kb_rect, self.hand_rect = bottom_layout(size)
+        kb_rect, default_hand = bottom_layout(size)
+        # Player-only: a compact hand area pulls the keyboard nearer the
+        # bottom edge, leaving more room in the middle. Key proportions and
+        # centring are untouched (the keys only shift down); hand poses are
+        # solved from the keyboard geometry so they stay on the keys while
+        # the forearms crop at the window's bottom edge.
+        hand_h = max(70, min(default_hand.h, int(h * 0.12)))
+        kb_rect.y = h - hand_h - kb_rect.h
+        self.hand_rect = pygame.Rect(0, kb_rect.y + kb_rect.h, w, hand_h)
         self.bar_rect = pygame.Rect(0, 0, w, TOP_BAR_H)
-        self.fall_rect = pygame.Rect(0, TOP_BAR_H, w, kb_rect.y - FELT_H - TOP_BAR_H)
+        # The score strip sits under the top bar, as wide as the keyboard.
+        # A short window shrinks the strip first; the fall area keeps >= 40 px.
+        avail = kb_rect.y - FELT_H - TOP_BAR_H
+        score_h = min(SCORE_STRIP_H, max(0, avail - 40)) if self.show_score else 0
+        self.score_rect = layout_score_rect(kb_rect, TOP_BAR_H, score_h)
+        fall_top = TOP_BAR_H + score_h
+        self.fall_rect = pygame.Rect(0, fall_top, w, kb_rect.y - FELT_H - fall_top)
         self.felt_rect = pygame.Rect(0, kb_rect.y - FELT_H, w, FELT_H)
         if hasattr(self, "keyboard"):
             self.keyboard.layout(kb_rect)
@@ -137,6 +155,9 @@ class Visualizer(Transport):
                 self.show_hands = not self.show_hands
             elif k == pygame.K_f:
                 self.show_fingers = not self.show_fingers
+            elif k == pygame.K_s:
+                self.show_score = not self.show_score
+                self.layout(self.screen.get_size())
             elif k in (pygame.K_HOME, pygame.K_r):
                 self.seek(-LEAD_IN)
             elif k == pygame.K_o:
@@ -236,6 +257,9 @@ class Visualizer(Transport):
                     s.blit(glow, (x - 4, keyline - gh), special_flags=pygame.BLEND_ADD)
             s.set_clip(None)
 
+            if self.show_score and self.score_rect.h > 0:
+                draw_score(s, song, t, self.score_rect, self.fonts, held)
+
         draw_felt(s, self.felt_rect)
         kb.draw(s, {n.pitch: n.hand for n in active})
         draw_hand_area(s, self.hand_rect)
@@ -266,7 +290,7 @@ class Visualizer(Transport):
         blit_shadowed(s, font, left, TEXT, (10, (r.h - font.get_height()) // 2))
 
         right = (f"speed {int(round(self.speed * 100))}%   view {self.window_secs:.1f}s   "
-                 f"{self.midi.status()}      Space  ←→  ↑↓  +/-  M  O  H  F   Esc menu")
+                 f"{self.midi.status()}      Space  ←→  ↑↓  +/-  M  O  H  F  S   Esc menu")
         font = self.fonts["small"]
         blit_shadowed(s, font, right, TEXT_DIM, (r.w - font.size(right)[0] - 10, (r.h - font.get_height()) // 2))
 
