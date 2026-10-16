@@ -338,7 +338,8 @@ def pair_hands(animators):
         a._idle_cache, a._clear_cache, a._path_cache = {}, {}, {}
         a._limit_cache, a._tip_limit_cache = {}, {}
         a._smooth_hand_cache, a._smooth_tip_cache = {}, {}
-        a._raise_cache, a._raise_min_cache = {}, {}
+        a._raise_cache, a._raise_min_cache, a._room_cache = {}, {}, {}
+        a._key_cache, a._depth_cache = {}, {}
         a._nb_cache = {}
 
 
@@ -501,20 +502,24 @@ def _clamp(x, lo, hi):
 
 def _solve3(A, b):
     """Solve a 3x3 linear system (Cramer's rule)."""
-    def det(m):
-        return (m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
-                - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
-                + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]))
-    d = det(A)
+    a00, a01, a02 = A[0]
+    a10, a11, a12 = A[1]
+    a20, a21, a22 = A[2]
+    b0, b1, b2 = b
+    d = (a00 * (a11 * a22 - a12 * a21)
+         - a01 * (a10 * a22 - a12 * a20)
+         + a02 * (a10 * a21 - a11 * a20))
     if abs(d) < 1e-12:
         return [0.0, 0.0, 0.0]
-    out = []
-    for i in range(3):
-        m = [row[:] for row in A]
-        for r in range(3):
-            m[r][i] = b[r]
-        out.append(det(m) / d)
-    return out
+    return [(b0 * (a11 * a22 - a12 * a21)
+             - a01 * (b1 * a22 - a12 * b2)
+             + a02 * (b1 * a21 - a11 * b2)) / d,
+            (a00 * (b1 * a22 - a12 * b2)
+             - b0 * (a10 * a22 - a12 * a20)
+             + a02 * (a10 * b2 - b1 * a20)) / d,
+            (a00 * (a11 * b2 - b1 * a21)
+             - a01 * (a10 * b2 - b1 * a20)
+             + b0 * (a10 * a21 - a11 * a20)) / d]
 
 
 class HandAnimator:
@@ -888,13 +893,16 @@ class HandAnimator:
             if len(cache) > 20000:
                 cache.clear()
             def avg(n):
-                acc, ws = [0.0, 0.0, 0.0], 0.0
+                a0 = a1 = a2 = 0.0
+                ws = 0.0
                 for d in range(-n, n + 1):
                     w = n + 1 - abs(d)
                     v = self._limited_grid(k + d)
-                    acc = [a + w * x for a, x in zip(acc, v)]
+                    a0 += w * v[0]
+                    a1 += w * v[1]
+                    a2 += w * v[2]
                     ws += w
-                return [a / ws for a in acc]
+                return (a0 / ws, a1 / ws, a2 / ws)
             # wide while the hand travels, narrow while its fingers are on
             # keys (with chords a few hundredths apart a wide window would
             # mix in the pose for the next chord): by how much the keys
@@ -919,14 +927,17 @@ class HandAnimator:
             return wx + x, wy + y
         tips, busy, local = {}, {}, {}
         rb = self.retract_back
+        spot_cache = {}
         for f in range(1, 6):
             rx, ry = self.rest_local[f]
-            tips[f], busy[f] = self._tip_target(f, t, to_world_xy(rx, ry - rb[f]), hand)
+            tips[f], busy[f] = self._tip_target(f, t, to_world_xy(rx, ry - rb[f]), hand,
+                                               _spot_cache=spot_cache)
             local[f] = rot(tips[f][0] - wx, tips[f][1] - wy, -psi)
         shaped = self._shaped_rests(busy, local)
         for f in range(1, 6):
             if busy[f] < 1.0:
-                tips[f], _ = self._tip_target(f, t, to_world_xy(shaped[f][0], shaped[f][1] - rb[f]), hand)
+                tips[f], _ = self._tip_target(f, t, to_world_xy(shaped[f][0], shaped[f][1] - rb[f]), hand,
+                                              _spot_cache=spot_cache)
                 if self.human > 0:
                     tips[f] = self._lively(f, t, tips[f], 1.0 - busy[f], psi)
             tips[f] = self._limit_tip(f, tips[f], wx, wy, psi)
@@ -1005,8 +1016,13 @@ class HandAnimator:
             a, b = self._limited_tip_grid(k_off)[f], self._limited_tip_grid(k_on)[f]
             u = _smooth((k - k_off) / max(1, k_on - k_off))
             return (a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u, mid[2])
-        x = sum(w * g_[f][0] for w, g_ in grids) / ws
-        y = sum(w * g_[f][1] for w, g_ in grids) / ws
+        x = y = 0.0
+        for w, g_ in grids:
+            tip = g_[f]
+            x += w * tip[0]
+            y += w * tip[1]
+        x /= ws
+        y /= ws
         for kk, gap in ((k_off, t - ends[i] if i >= 0 else math.inf),
                         (k_on, starts[i + 1] - t if i + 1 < len(starts) else math.inf)):
             if kk is not None and gap < PIN_EASE_T:
@@ -1034,9 +1050,11 @@ class HandAnimator:
             for f, (x, y, z) in tips.items():
                 if prev is not None:
                     px, py, _ = prev[f]
-                    d = math.hypot(x - px, y - py)
+                    dx, dy = x - px, y - py
+                    d = math.sqrt(dx * dx + dy * dy)
                     if d > step:
-                        x, y = px + (x - px) * step / d, py + (y - py) * step / d
+                        k_ = step / d
+                        x, y = px + (x - px) * k_, py + (y - py) * k_
                 q[f] = (x, y, z)
             prev = cache[j] = q
         return prev
@@ -1061,7 +1079,7 @@ class HandAnimator:
             q = self._key_fix(tt, *self._placed_at(tt))
             if prev is not None:
                 dx, dy, dp = q[0] - prev[0], q[1] - prev[1], q[2] - prev[2]
-                move = math.hypot(dx, dy) + abs(dp) * arm
+                move = math.sqrt(dx * dx + dy * dy) + abs(dp) * arm
                 if move > step:
                     k_ = step / move
                     q = (prev[0] + dx * k_, prev[1] + dy * k_, prev[2] + dp * k_)
@@ -1096,47 +1114,81 @@ class HandAnimator:
         def residuals(q):
             x, y, p = q
             c, s_ = math.cos(p), math.sin(p)
-            out = [x - wx, y - wy, arm * (p - psi)]
-            for kx, ys, (blx, bly, _), lo, hi, hmin, hmax, k in cons:
+            ncon = len(cons)
+            out = [x - wx, y - wy, arm * (p - psi)] + [0.0] * (2 * ncon)
+            k = 3
+            for kx, ys, (blx, bly, _), lo, hi, hmin, hmax, kk in cons:
                 # anywhere along the key will do: the depth that needs the least
+                bx, by = x + blx * c - bly * s_, y + blx * s_ + bly * c
                 best = None
                 for ky in ys:
-                    dx = kx - (x + blx * c - bly * s_)
-                    dy = ky - (y + blx * s_ + bly * c)
+                    dx = kx - bx
+                    dy = ky - by
                     lx, ly = dx * c + dy * s_, -dx * s_ + dy * c
-                    a, h = math.atan2(lx, ly), math.hypot(lx, ly)
-                    ea = h * (max(0.0, a - hi) + min(0.0, a - lo))
-                    eh = max(0.0, h - hmax) + min(0.0, h - hmin)
-                    if best is None or ea * ea + eh * eh < best[0] - 1e-9:
-                        best = (ea * ea + eh * eh, ea, eh)
-                out += [k * best[1], k * best[2]]
+                    a = math.atan2(lx, ly)
+                    h = math.sqrt(lx * lx + ly * ly)
+                    e1 = a - hi
+                    e2 = a - lo
+                    ea = h * ((e1 if e1 > 0.0 else 0.0) + (e2 if e2 < 0.0 else 0.0))
+                    e3 = h - hmax
+                    e4 = h - hmin
+                    eh = (e3 if e3 > 0.0 else 0.0) + (e4 if e4 < 0.0 else 0.0)
+                    ee = ea * ea + eh * eh
+                    if best is None or ee < best[0] - 1e-9:
+                        best = (ee, ea, eh)
+                out[k] = kk * best[1]
+                out[k + 1] = kk * best[2]
+                k += 2
             return out
+
+        def cost(r, lo=0):
+            c = 0.0
+            for i in range(lo, len(r)):
+                c += r[i] * r[i]
+            return c
         q = [wx, wy, psi]
         r0 = residuals(q)
-        cost = sum(v * v for v in r0)
-        eps = (0.5, 0.5, 1e-3)
+        c0 = cost(r0)
+        eps0, eps1, eps2 = eps = (0.5, 0.5, 1e-3)
         for _ in range(KEY_FIX_ITERS):
-            if sum(v * v for v in r0[3:]) < 1e-6:
+            if cost(r0, 3) < 1e-6:
                 break
-            cols = []
-            for j in range(3):
-                qq = list(q)
-                qq[j] += eps[j]
-                cols.append([(a - b) / eps[j] for a, b in zip(residuals(qq), r0)])
-            A = [[sum(ci * cj for ci, cj in zip(cols[i], cols[j])) for j in range(3)] for i in range(3)]
-            g = [-sum(ci * r for ci, r in zip(cols[i], r0)) for i in range(3)]
-            for i in range(3):
-                A[i][i] *= 1.0 + GN_DAMPING
-            dq = _solve3(A, g)
+            q0, q1, q2 = q
+            r1 = residuals((q0 + eps0, q1, q2))
+            r2 = residuals((q0, q1 + eps1, q2))
+            r3 = residuals((q0, q1, q2 + eps2))
+            n = len(r0)
+            a00 = a01 = a02 = a11 = a12 = a22 = 0.0
+            g0 = g1 = g2 = 0.0
+            for i in range(n):
+                d = r0[i]
+                c0_ = (r1[i] - d) / eps0
+                c1_ = (r2[i] - d) / eps1
+                c2_ = (r3[i] - d) / eps2
+                a00 += c0_ * c0_
+                a01 += c0_ * c1_
+                a02 += c0_ * c2_
+                a11 += c1_ * c1_
+                a12 += c1_ * c2_
+                a22 += c2_ * c2_
+                g0 -= c0_ * d
+                g1 -= c1_ * d
+                g2 -= c2_ * d
+            A = [[a00, a01, a02], [a01, a11, a12], [a02, a12, a22]]
+            damp = 1.0 + GN_DAMPING
+            A[0][0] *= damp
+            A[1][1] *= damp
+            A[2][2] *= damp
+            dq = _solve3(A, [g0, g1, g2])
             # only ever downhill: halve a step that would overshoot
             for _ in range(6):
-                qn = [q[i] + dq[i] for i in range(3)]
+                qn = [q0 + dq[0], q1 + dq[1], q2 + dq[2]]
                 rn = residuals(qn)
-                cn = sum(v * v for v in rn)
-                if cn < cost:
-                    q, r0, cost = qn, rn, cn
+                cn = cost(rn)
+                if cn < c0:
+                    q, r0, c0 = qn, rn, cn
                     break
-                dq = [d * 0.5 for d in dq]
+                dq = [dq[0] * 0.5, dq[1] * 0.5, dq[2] * 0.5]
             else:
                 break
         return tuple(q)
@@ -1384,7 +1436,8 @@ class HandAnimator:
         self._idle_cache, self._clear_cache, self._path_cache = {}, {}, {}
         self._limit_cache, self._tip_limit_cache = {}, {}
         self._smooth_hand_cache, self._smooth_tip_cache = {}, {}
-        self._raise_cache, self._raise_min_cache = {}, {}
+        self._raise_cache, self._raise_min_cache, self._room_cache = {}, {}, {}
+        self._key_cache, self._depth_cache = {}, {}
         self._nb_cache = {}
         # mirror axis (centre of D4) and the shoulder, ~10 semitones from D4
         # toward the hand's own side (in the mirrored frame for the left hand),
@@ -1410,6 +1463,13 @@ class HandAnimator:
         for a note among black keys (`white_up`), further up, just past the
         black keys' front, so the hand needn't move in and out between them.
         """
+        ck = (pitch, f, id(note))
+        got = self._key_cache.get(ck)
+        if got is None:
+            got = self._key_cache[ck] = self._key_target(pitch, f, note)
+        return got
+
+    def _key_target(self, pitch, f, note=None):
         if isinstance(pitch, tuple):
             (x1, y1), (x2, y2) = (self.key_target(p, f, note) for p in pitch)
             return (x1 + x2) / 2, (y1 + y2) / 2
@@ -1426,6 +1486,13 @@ class HandAnimator:
         return self._mx(r.centerx), min(max(y, lo), hi)
 
     def _key_depths(self, pk, note=None, f=None):
+        ck = (pk, f, id(note))
+        got = self._depth_cache.get(ck)
+        if got is None:
+            got = self._depth_cache[ck] = self._key_depths_uncached(pk, note, f)
+        return got
+
+    def _key_depths_uncached(self, pk, note=None, f=None):
         """
         (lowest, highest) world Y a fingertip may play key(s) pk at: the
         pianist's playing area on the key (key_area_near .. key_area_far of
@@ -1461,28 +1528,36 @@ class HandAnimator:
         line at its nearest point there - not swung round at full length,
         which would stretch the finger out past where it is going.
         """
-        rot = self._rot
         blx, bly, blz = self.base_local[f]
-        bx, by = rot(blx, bly, psi)
-        bx, by = wx + bx, wy + by
-        lx, ly = rot(x - bx, y - by, -psi)
-        a, h = math.atan2(lx, ly), math.hypot(lx, ly)
+        c, s_ = math.cos(psi), math.sin(psi)
+        bx, by = wx + blx * c - bly * s_, wy + blx * s_ + bly * c
+        dx, dy = x - bx, y - by
+        lx, ly = dx * c + dy * s_, -dx * s_ + dy * c
+        a = math.atan2(lx, ly)
+        h = math.sqrt(lx * lx + ly * ly)
         lo, hi = self.splay[f]
         m = math.radians(KEY_FIX_MARGIN_DEG) * margin / KEY_FIX_MARGIN if margin else 0.0
         lo, hi = lo - slack + m, hi + slack - m
-        hmin, hmax = self._reach_range(f, blz - z, 0.99)
+        length = self.length[f]
+        L = length * 0.99
+        dz = blz - z
+        hmax = math.sqrt(max(0.0, L * L - dz * dz))
+        hmin = REACH_MIN[f] * length
+        if hmin > hmax:
+            hmin = hmax
         if z > 0:
             hmin *= self.curl_min            # a retracting pianist curls idle fingers further in
-        dm = margin * self.length[f]
+        dm = margin * length
         hmin, hmax = hmin + dm, max(hmin + dm, hmax - dm)
-        ac = _clamp(a, lo, hi)
+        ac = lo if a < lo else hi if a > hi else a
         if ac != a:
             h *= max(0.0, math.cos(a - ac))          # nearest point on the limit's line
-        a, h = ac, _clamp(h, hmin, hmax)
-        cx, cy = rot(h * math.sin(a), h * math.cos(a), psi)
-        return bx + cx, by + cy
+        h = hmin if h < hmin else hmax if h > hmax else h
+        sa, ca = math.sin(ac), math.cos(ac)
+        hx, hy = h * sa, h * ca
+        return bx + hx * c - hy * s_, by + hx * s_ + hy * c
 
-    def _key_spot(self, pk, f, hand, z=None, note=None, soft=0.0):
+    def _key_spot(self, pk, f, hand, z=None, note=None, soft=0.0, _spot_cache=None):
         """
         Where finger f plays key(s) pk with the hand at `hand` (wx, wy, psi):
         squarely across the key, and along it where it aims (key_target:
@@ -1498,28 +1573,50 @@ class HandAnimator:
         (KEY_SPOT_SOFT, by `soft` 0..1) while the finger is on its way; a
         key far out of reach fades back to its usual spot.
         """
+        if _spot_cache is not None:
+            ck = (f, pk, z, id(note), soft)
+            got = _spot_cache.get(ck)
+            if got is not None:
+                return got
         kx, ky = self.key_target(pk, f, note)
         if hand is None:
             return kx, ky
         z = -self.travel if z is None else z
         lo, hi = self._key_depths(pk)          # the whole playing area, if reach needs it
         span = max(1e-6, hi - lo)
-        cx, cy = self._clamp_tip(f, kx, ky, z, *hand, margin=KEY_FIX_MARGIN)
-        e0 = math.hypot(cx - kx, cy - ky)
+        clamp_tip = self._clamp_tip
+        hx, hy, hp = hand
+        cx, cy = clamp_tip(f, kx, ky, z, hx, hy, hp, margin=KEY_FIX_MARGIN)
+        dx, dy = cx - kx, cy - ky
+        e0 = math.sqrt(dx * dx + dy * dy)
         far = _smooth((e0 - 1.5 * span) / (1.5 * span))
         if e0 < 0.5 or far >= 1.0:
             return kx, ky
         kk = _lerp(KEY_SPOT_FIRM[0], KEY_SPOT_SOFT[0], soft)
         tau = _lerp(KEY_SPOT_FIRM[1], KEY_SPOT_SOFT[1], soft) * self.ppi
-        cands = [(ky, kk * e0)]
-        for i in range(21):
-            y = lo + span * i / 20
-            cx, cy = self._clamp_tip(f, kx, y, z, *hand, margin=KEY_FIX_MARGIN)
-            cands.append((y, abs(y - ky) + kk * math.hypot(cx - kx, cy - y)))
-        best = min(c for _, c in cands)
-        ws = [(y, math.exp(-(c - best) / tau)) for y, c in cands]
-        y = sum(y * w for y, w in ws) / sum(w for _, w in ws)
-        return kx, _lerp(y, ky, far)
+        # single pass over the aim + 21 sampled depths: same costs as before
+        best = kk * e0
+        costs = [0.0] * 22
+        costs[0] = best
+        for i in range(1, 22):
+            y = lo + span * (i - 1) / 20
+            qx, qy = clamp_tip(f, kx, y, z, hx, hy, hp, margin=KEY_FIX_MARGIN)
+            qdx, qdy = qx - kx, qy - y
+            c = abs(y - ky) + kk * math.sqrt(qdx * qdx + qdy * qdy)
+            costs[i] = c
+            if c < best:
+                best = c
+        sw = sy = 0.0
+        y0 = ky
+        for i in range(22):
+            y = y0 if i == 0 else lo + span * (i - 1) / 20
+            w = math.exp(-(costs[i] - best) / tau)
+            sy += y * w
+            sw += w
+        spot = (kx, _lerp(sy / sw, ky, far))
+        if _spot_cache is not None:
+            _spot_cache[ck] = spot
+        return spot
 
     def _over_black(self, p):
         """
@@ -1572,49 +1669,69 @@ class HandAnimator:
         rising just before a strike, fading right after a release).
         """
         items = []
+        by_finger = self.by_finger
+        finger_starts = self.finger_starts
+        finger_ends = self.finger_ends
+        antic_t = self.antic_t
+        need_t = self.need_t
+        pk_of = self._pk
+        has_key = self._has_key
+        travel = self._travel
         for f in range(1, 6):
-            notes, starts, ends = self.by_finger[f], self.finger_starts[f], self.finger_ends[f]
+            notes, starts, ends = by_finger[f], finger_starts[f], finger_ends[f]
             n = len(notes)
             if not n:
                 continue
             i = bisect.bisect_right(starts, t) - 1
             nxt = i + 1 if i + 1 < n else None
-            ramp = _smooth(1.0 - (starts[nxt] - t) / self.antic_t) if nxt is not None else 0.0
-            need_next = _smooth(1.0 - (starts[nxt] - t) / self.need_t) ** 3 if nxt is not None else 0.0
+            if nxt is not None:
+                ramp = _smooth(1.0 - (starts[nxt] - t) / antic_t)
+                nn = _smooth(1.0 - (starts[nxt] - t) / need_t)
+                need_next = nn * nn * nn
+            else:
+                ramp = need_next = 0.0
             if i < 0:                                                  # nothing played yet
-                items.append((self._pk(notes[0]), f, max(ramp, 1e-6 + IDLE_W * 0.5 ** (starts[0] - t)), need_next, starts[0], 0, notes[0]))
+                idle = 1e-6 + IDLE_W * 0.5 ** (starts[0] - t)
+                w = ramp if ramp > idle else idle
+                items.append((pk_of(notes[0]), f, w, need_next, starts[0], 0, notes[0]))
                 continue
             # the key before last, if it's still fading out
             if i >= 1 and t >= ends[i - 1]:
-                hold = min(RELEASE_HOLD_T, max(1e-3, starts[i] - ends[i - 1]))
+                gap = starts[i] - ends[i - 1]
+                hold = RELEASE_HOLD_T if RELEASE_HOLD_T < gap else gap
+                if hold < 1e-3:
+                    hold = 1e-3
                 w = 1.0 - _smooth((t - ends[i - 1]) / hold)
                 if w > 0:
-                    items.append((self._pk(notes[i - 1]), f, w, RELEASE_NEED * (1.0 - _smooth((t - ends[i - 1]) / RELEASE_NEED_T)), starts[i - 1], 1, notes[i - 1]))
+                    items.append((pk_of(notes[i - 1]), f, w, RELEASE_NEED * (1.0 - _smooth((t - ends[i - 1]) / RELEASE_NEED_T)), starts[i - 1], 1, notes[i - 1]))
             if t < ends[i]:
                 # pressing; it can only lean toward its next key for now
-                items.append((self._pk(notes[i]), f, 1.0, 1.0, starts[i], 0, notes[i]))
+                items.append((pk_of(notes[i]), f, 1.0, 1.0, starts[i], 0, notes[i]))
                 if nxt is not None and ramp > 0:
                     w = ANTIC_HELD * ramp
-                    items.append((self._pk(notes[nxt]), f, w, w ** VOTE_POWER, starts[nxt], 0, notes[nxt]))
+                    items.append((pk_of(notes[nxt]), f, w, w ** VOTE_POWER, starts[nxt], 0, notes[nxt]))
                 continue
             # Free: the pull moves from the old key to the next one exactly as
             # the finger itself travels there (see _travel).
             age = t - ends[i]
             if nxt is not None:
-                s, prep_start = self._travel(f, i, t)
+                s, prep_start = travel(f, i, t)
                 immediate = prep_start <= ends[i] + 1e-6
             else:
                 s, immediate = 0.0, False
             fade = 1.0 if immediate else 1.0 - _smooth(age / RELEASE_HOLD_T)
-            w = (1.0 - s) * max(fade, 1e-6 + IDLE_W * 0.5 ** age)
+            idle = 1e-6 + IDLE_W * 0.5 ** age
+            w = (1.0 - s) * (fade if fade > idle else idle)
             if w > 0:
-                items.append((self._pk(notes[i]), f, w, RELEASE_NEED * (1.0 - _smooth(age / RELEASE_NEED_T)), starts[i], 1, notes[i]))
+                items.append((pk_of(notes[i]), f, w, RELEASE_NEED * (1.0 - _smooth(age / RELEASE_NEED_T)), starts[i], 1, notes[i]))
             if nxt is not None:
-                w = max(ANTIC_HELD * ramp, s)
-                c = max((ANTIC_HELD * ramp) ** VOTE_POWER, need_next)
+                ar = ANTIC_HELD * ramp
+                w = ar if ar > s else s
+                arc = ar ** VOTE_POWER
+                c = arc if arc > need_next else need_next
                 if w > 0 or c > 0:
-                    items.append((self._pk(notes[nxt]), f, w, c, starts[nxt], 0, notes[nxt]))
-        return [it for it in items if self._has_key(it[0])]
+                    items.append((pk_of(notes[nxt]), f, w, c, starts[nxt], 0, notes[nxt]))
+        return [it for it in items if has_key(it[0])]
 
     def _solve_hand(self, items):
         """
@@ -1645,15 +1762,22 @@ class HandAnimator:
             a[1] += w
         fit, lim, imp = [], [], {}
         for f, lst in per.items():
-            ws = sum(w for _, _, w, _ in lst)
+            ws = sc = cmax = xw = yw = xc = yc = 0.0
+            for x, y, w, c in lst:
+                ws += w
+                sc += c
+                if c > cmax:
+                    cmax = c
+                xw += x * w
+                yw += y * w
+                xc += x * c
+                yc += y * c
             if ws > 0:
-                imp[f] = ws + 2.0 * max(c for _, _, _, c in lst)    # pull, plus how soon it's needed
-                fit.append(((sum(x * w for x, _, w, _ in lst) / ws, sum(y * w for _, y, w, _ in lst) / ws),
+                imp[f] = ws + 2.0 * cmax    # pull, plus how soon it's needed
+                fit.append(((xw / ws, yw / ws),
                             self.rest_local[f], ws * FIT_WEIGHT[f], f))
-            sc = sum(c for _, _, _, c in lst)
             if sc > 1e-9:
-                lim.append((sum(x * c for x, _, _, c in lst) / sc,
-                            sum(y * c for _, y, _, c in lst) / sc, f, max(c for _, _, _, c in lst),
+                lim.append((xc / sc, yc / sc, f, cmax,
                             rel.get(f, 0.0) / sc))
         # Targets out of the fingers' natural order (the thumb passing under,
         # a finger crossing over it, or a finger already reaching past the
@@ -1711,48 +1835,81 @@ class HandAnimator:
                          0.25 * (1 - rshare + rshare * c) / soft, wk * (1 - rshare + rshare * c) / soft))
         bias = self._bias
         fits = [(t, r, math.sqrt(k_soft * w)) for t, r, w in fit]
+        yaw_sx, yaw_fl = self.shoulder_x, self.forearm_len
 
         def residuals(wx, wy, psi):
             c, s_ = math.cos(psi), math.sin(psi)
-            out = []
+            nfit, nlim = len(fits), len(lims)
+            out = [0.0] * (2 * nfit + 2 + 2 * nlim)
+            k = 0
             for (tx, ty), (rx, ry), kk in fits:
-                out.append(kk * (wx + rx * c - ry * s_ - tx))
-                out.append(kk * (wy + rx * s_ + ry * c - ty))
-            dpsi = psi - self._yaw(wx)
-            out.append(k_prior * (dpsi - bias))
-            out.append(k_dev * (max(0.0, dpsi - dev_hi) + min(0.0, dpsi - dev_lo)))
-            for tx, ty, (blx, bly, _), lo, hi, hmin, hmax, k, sa, sh in lims:
+                out[k] = kk * (wx + rx * c - ry * s_ - tx)
+                out[k + 1] = kk * (wy + rx * s_ + ry * c - ty)
+                k += 2
+            dpsi = psi + 0.3 * math.atan2(wx - yaw_sx, yaw_fl)
+            out[k] = k_prior * (dpsi - bias)
+            over = dpsi - dev_hi
+            under = dpsi - dev_lo
+            out[k + 1] = k_dev * ((over if over > 0.0 else 0.0) + (under if under < 0.0 else 0.0))
+            k += 2
+            for tx, ty, (blx, bly, _), lo, hi, hmin, hmax, kk, sa, sh in lims:
                 dx = tx - (wx + blx * c - bly * s_)
                 dy = ty - (wy + blx * s_ + bly * c)
                 lx, ly = dx * c + dy * s_, -dx * s_ + dy * c        # into the hand frame
-                a, h = math.atan2(lx, ly), math.hypot(lx, ly)
+                a = math.atan2(lx, ly)
+                h = math.sqrt(lx * lx + ly * ly)
                 # saturating for keys not (yet) pressed: one hopelessly out of
                 # reach (left behind in a leap) only tugs, it doesn't wrench
                 # the hand round
-                ea = max(0.0, a - hi) + min(0.0, a - lo)
-                eh = max(0.0, h - hmax) + min(0.0, h - hmin)
-                out.append(k * h * ea / (1.0 + abs(ea) / sa))
-                out.append(k * eh / (1.0 + abs(eh) / sh))
+                e1 = a - hi
+                e2 = a - lo
+                ea = (e1 if e1 > 0.0 else 0.0) + (e2 if e2 < 0.0 else 0.0)
+                e3 = h - hmax
+                e4 = h - hmin
+                eh = (e3 if e3 > 0.0 else 0.0) + (e4 if e4 < 0.0 else 0.0)
+                aea = ea if ea >= 0.0 else -ea
+                aeh = eh if eh >= 0.0 else -eh
+                out[k] = kk * h * ea / (1.0 + aea / sa)
+                out[k + 1] = kk * eh / (1.0 + aeh / sh)
+                k += 2
             return out
 
-        eps = (0.5, 0.5, 1e-3)
+        eps0, eps1, eps2 = 0.5, 0.5, 1e-3
+        s0, s1, s2 = 1.0, 1.0, arm
         for _ in range(GN_ITERS):
             r0 = residuals(*q)
-            cols = []
-            for j in range(3):
-                qq = list(q)
-                qq[j] += eps[j]
-                cols.append([(a - b) / eps[j] for a, b in zip(residuals(*qq), r0)])
+            n = len(r0)
+            q0, q1, q2 = q
+            r1 = residuals(q0 + eps0, q1, q2)
+            r2 = residuals(q0, q1 + eps1, q2)
+            r3 = residuals(q0, q1, q2 + eps2)
             # (J^T J + damping) dq = -J^T r, in units scaled so psi ~ pixels
-            scale = (1.0, 1.0, arm)
-            A = [[sum(ci * cj for ci, cj in zip(cols[i], cols[j])) / (scale[i] * scale[j])
-                  for j in range(3)] for i in range(3)]
-            g = [-sum(ci * r for ci, r in zip(cols[i], r0)) / scale[i] for i in range(3)]
+            a00 = a01 = a02 = a11 = a12 = a22 = 0.0
+            g0 = g1 = g2 = 0.0
+            for i in range(n):
+                d = r0[i]
+                c0 = (r1[i] - d) / eps0
+                c1 = (r2[i] - d) / eps1
+                c2 = (r3[i] - d) / eps2
+                a00 += c0 * c0
+                a01 += c0 * c1
+                a02 += c0 * c2
+                a11 += c1 * c1
+                a12 += c1 * c2
+                a22 += c2 * c2
+                g0 -= c0 * d
+                g1 -= c1 * d
+                g2 -= c2 * d
+            A = [[a00 / (s0 * s0), a01 / (s0 * s1), a02 / (s0 * s2)],
+                 [a01 / (s0 * s1), a11 / (s1 * s1), a12 / (s1 * s2)],
+                 [a02 / (s0 * s2), a12 / (s1 * s2), a22 / (s2 * s2)]]
+            g = [g0 / s0, g1 / s1, g2 / s2]
             lam = GN_DAMPING * (A[0][0] + A[1][1] + A[2][2]) / 3 + 1e-9
-            for i in range(3):
-                A[i][i] += lam
+            A[0][0] += lam
+            A[1][1] += lam
+            A[2][2] += lam
             dq = _solve3(A, g)
-            q = [q[i] + dq[i] / scale[i] for i in range(3)]
+            q = [q0 + dq[0] / s0, q1 + dq[1] / s1, q2 + dq[2] / s2]
         psi0 = self._yaw(q[0])
         q[2] = _clamp(q[2], psi0 + dev_lo, psi0 + dev_hi)           # never past the wrist's range
         return tuple(q)
@@ -1761,11 +1918,17 @@ class HandAnimator:
         """Weighted rigid fit of the natural fingertip spots onto the keys."""
         rot, S = self._rot, self.S
         dev_lo, dev_hi = (math.radians(a) for a in WRIST_DEV_DEG)
-        ws = sum(w for _, _, w in pts)
-        tbx = sum(t[0] * w for t, _, w in pts) / ws
-        tby = sum(t[1] * w for t, _, w in pts) / ws
-        rbx = sum(r[0] * w for _, r, w in pts) / ws
-        rby = sum(r[1] * w for _, r, w in pts) / ws
+        ws = tbx = tby = rbx = rby = 0.0
+        for (tx, ty), (rx, ry), w in pts:
+            ws += w
+            tbx += tx * w
+            tby += ty * w
+            rbx += rx * w
+            rby += ry * w
+        tbx /= ws
+        tby /= ws
+        rbx /= ws
+        rby /= ws
         C = Sn = 0.0
         for (tx, ty), (rx, ry), w in pts:
             ax, ay, bx, by = rx - rbx, ry - rby, tx - tbx, ty - tby
@@ -1962,7 +2125,7 @@ class HandAnimator:
         span = max(1e-3, window * self.travel_share, min(need, window))
         return _smooth((t - prep_start) / span), prep_start
 
-    def _tip_target(self, f, t, rest_xy, hand=None):
+    def _tip_target(self, f, t, rest_xy, hand=None, _spot_cache=None):
         """
         (x, y, z) world target for fingertip f at time t, and how busy it is
         (0..1). With the hand's (wx, wy, psi), keys are aimed at where this
@@ -1980,11 +2143,12 @@ class HandAnimator:
         prev_end = ends[i] if prev else -math.inf
 
         if prev and t < prev_end:                                    # pressing
-            kx, ky = self._key_spot(self._pk(prev), f, hand, note=prev)
-            return (kx, ky, -travel * min(1.0, (t - starts[i]) / PRESS_T)), 1.0
+            kx, ky = self._key_spot(self._pk(prev), f, hand, note=prev, _spot_cache=_spot_cache)
+            pr = (t - starts[i]) / PRESS_T
+            return (kx, ky, -travel * (pr if pr < 1.0 else 1.0)), 1.0
 
         if prev:                                                     # released
-            kx, ky = self._key_spot(self._pk(prev), f, hand, note=prev)
+            kx, ky = self._key_spot(self._pk(prev), f, hand, note=prev, _spot_cache=_spot_cache)
             since = t - prev_end
             z = _lerp(-travel, hover, _ease_out(since / RELEASE_T))
             s = _smooth((since - LINGER_T) / RETURN_T)
@@ -2005,8 +2169,21 @@ class HandAnimator:
         prep_start, strike_start, strike = self._prep_window(f, i)
         if t < prep_start:
             return idle, busy
-        s = self._travel(f, i, t)[0] if t < strike_start else 1.0
-        kx, ky = self._key_spot(self._pk(nxt), f, hand, note=nxt, soft=1.0 - s)
+        if t < strike_start:
+            # same as _travel(f, i, t)[0], without solving the window twice
+            need = self.lead.get(id(nxt), 0.0)
+            window = strike_start - prep_start
+            span = window * self.travel_share
+            mspan = need if need < window else window
+            if mspan > span:
+                span = mspan
+            if span < 1e-3:
+                span = 1e-3
+            s = _smooth((t - prep_start) / span)
+        else:
+            s = 1.0
+        kx, ky = self._key_spot(self._pk(nxt), f, hand, note=nxt, soft=1.0 - s,
+                                _spot_cache=_spot_cache)
         if t < strike_start:
             arc = 0.0
             if f != 1:   # fingers arc up and over; the thumb slides under instead
@@ -2078,43 +2255,77 @@ class HandAnimator:
     def _arch_smooth(self, k):
         n = ARCH_MIN_STEPS
         cache = self._raise_cache
-        if k not in cache:
+        q = cache.get(k)
+        if q is None:
             if len(cache) > 20000:
                 cache.clear()
-            ws = sum(n + 1 - abs(d) for d in range(-n, n + 1))
-            low = [(n + 1 - abs(d), self._arch_min(k + d)) for d in range(-n, n + 1)]
-            cache[k] = {f: sum(w * r[f] for w, r in low) / ws for f in ARCH_FINGERS}
-        return cache[k]
+            # triangular weights (n+1-|d|), same order as before
+            ws = 0.0
+            s2 = s3 = s4 = 0.0
+            for d in range(-n, n + 1):
+                w = n + 1 - abs(d)
+                r = self._arch_min(k + d)
+                ws += w
+                s2 += w * r[2]
+                s3 += w * r[3]
+                s4 += w * r[4]
+            q = cache[k] = {2: s2 / ws, 3: s3 / ws, 4: s4 / ws}
+        return q
 
     def _arch_min(self, k):
         n = ARCH_MIN_STEPS
         cache = self._raise_min_cache
-        if k not in cache:
+        q = cache.get(k)
+        if q is None:
             if len(cache) > 20000:
                 cache.clear()
-            rooms = [self._arch_room(k + d) for d in range(-n, n + 1)]
-            cache[k] = {f: min(r[f] for r in rooms) for f in ARCH_FINGERS}
-        return cache[k]
+            m2 = m3 = m4 = math.inf
+            for d in range(-n, n + 1):
+                r = self._arch_room(k + d)
+                if r[2] < m2:
+                    m2 = r[2]
+                if r[3] < m3:
+                    m3 = r[3]
+                if r[4] < m4:
+                    m4 = r[4]
+            q = cache[k] = {2: m2, 3: m3, 4: m4}
+        return q
 
     def _arch_room(self, k):
         """
         {finger: how far its knuckle can rise at grid step k (up to ARCH_RAISE_IN)
         with the finger still reaching its fingertip with ARCH_REACH of its length}.
         """
+        cache = self._room_cache
+        q = cache.get(k)
+        if q is not None:
+            return q
+        if len(cache) > 20000:
+            cache.clear()
         t = k * LIMIT_GRID_T
         wx, wy, psi = self._limited_at(t)
         tips = self._limited_tips(t)
+        limit_tip = self._limit_tip
+        mcp_local = self.mcp_local
+        bones = self.geo.bones
+        S = self.S
+        cap = ARCH_RAISE_IN * self.ppi
+        br = self.black_rise_in
+        sqrt = math.sqrt
+        c, s_ = math.cos(psi), math.sin(psi)
         out = {}
         for f in ARCH_FINGERS:
-            tip = self._limit_tip(f, tips[f], wx, wy, psi)
-            if self.black_rise_in > 0:
+            tip = limit_tip(f, tips[f], wx, wy, psi)
+            if br > 0:
                 tip = self._over_black(tip)
-            mx, my, mz = self.mcp_local[f]
-            x, y = self._rot(mx, my, psi)
-            flat = math.hypot(wx + x - tip[0], wy + y - tip[1])
-            L = ARCH_REACH * sum(self.geo.bones[f]) * self.S
-            room = tip[2] + math.sqrt(L * L - flat * flat) - mz if flat < L else 0.0
-            out[f] = min(ARCH_RAISE_IN * self.ppi, max(0.0, room))
+            mx, my, mz = mcp_local[f]
+            x, y = mx * c - my * s_, mx * s_ + my * c
+            dx, dy = wx + x - tip[0], wy + y - tip[1]
+            flat = sqrt(dx * dx + dy * dy)
+            L = ARCH_REACH * (bones[f][0] + bones[f][1] + bones[f][2]) * S
+            room = tip[2] + sqrt(L * L - flat * flat) - mz if flat < L else 0.0
+            out[f] = cap if room > cap else (0.0 if room < 0.0 else room)
+        cache[k] = out
         return out
 
     def _limit_tip(self, f, tip, wx, wy, psi):
