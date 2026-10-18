@@ -491,10 +491,10 @@ Detailed design notes, kept up to date as features were added. Start with `CLAUD
   - Winter Wind RH 20-40 s: fingertip jerks (second difference > 0.15 in/frame² at 120 fps) 846 → 134, worst
     1.15 → 0.67; frames with a finger > 95% stretched 450 → 166. Pressed tips > 0.1 key off: Op. 25 No. 10 (0-30 s)
     55 → 69, Winter Wind 27 → 29, demo 9 → 23 (worst 0.35). ~2.0-2.4 ms per hand per frame.
-- **Smoother motion, every note pressed** (2026-10-11, after viewers called the 3D hands twitchy and spider-like,
+- **Smoother motion, every note pressed** (2026-10-11, after viewers called the hands twitchy and spider-like,
   "especially the left hand", and saw notes missing at the start of Ember Fountain). Measured on Ember Fountain,
   the demo song and a generated Op. 25 No. 10-like test (octaves and a held inner note every 0.14 s, both hands,
-  45 s): notes never pressed (`export3d.Export.pressed_map`), fingertip frames > 0.1 white key off the key they
+  45 s): notes never pressed, fingertip frames > 0.1 white key off the key they
   hold, sideways fingertip jolts (> 60 m/s² at 60 fps, per minute) and wrist acceleration (p99).
   - Early release against every chord struck while a key is held (`__init__`), not just the next one: a bass
     note held through a broken chord was out of reach of its third or fourth note, whose finger landed 1-2 keys
@@ -527,9 +527,7 @@ Detailed design notes, kept up to date as features were added. Start with `CLAUD
   steps then averaged over as many, so a knuckle settles ahead of a stretch. Solver, fingertips and keys are
   untouched. Ember Fountain: knuckle joint −15° -> +7-10° (bent back > 20°: 37% -> 6% of frames), middle joints
   65-70° -> 56-60°, middle knuckle 44 -> 59 mm; still 0 notes missed, tips off and jolts unchanged. The palm now
-  slopes up 16° from the wrist: the wrist can't rise with it, as it carries the thumb's root. The export passes
-  the raise per frame ("arch"); `hands_rig` takes the palm's frame from the unraised knuckles and adds the raise
-  to the sculpt's own knuckles 2-4, so the arch doesn't tilt the whole palm.
+  slopes up 16° from the wrist: the wrist can't rise with it, as it carries the thumb's root.
 - **Human touch** (2026-10-11; pianist `humanize`, default 50%, after "put some randomness in, add some humanity
   to the hand movement"). Only slow, smooth, deterministic variations (the same video on every render; `_drift` is
   three sines at 0.1-0.5 Hz with phases from a seed per hand, `_note_variety` a fixed number per note), none
@@ -554,9 +552,8 @@ Detailed design notes, kept up to date as features were added. Start with `CLAUD
     need stretch), and - between two pianists, whose facing hands can't pass - coming within `SHARE_GAP` of the
     keys the other spans (`_extent`: at least `SHARE_HAND_W` 9 semitones round what it holds or just played).
     ~1 s for Ember Fountain with 4 or 6 hands.
-  - `export3d.shared` makes a sub-song per pair (labels "L"/"R", "L2"/"R2", ...; fingering re-planned) and seats
-    each pianist in front of their part (`HandAnimator.seat`: the shoulder moves with it, so forearms come in
-    from their own place). `hands.seat_side_by_side`: each pianist's hand nearest the next one's keeps its wrist
+  - Each pianist is seated in front of their part (`HandAnimator.seat`: the shoulder moves with it, so forearms come
+    in from their own place). `hands.seat_side_by_side`: each pianist's hand nearest the next one's keeps its wrist
     `NEIGHBOUR_CLEAR_SPAN` (0.9) hand spans from it while idle (`_neighbour_shift`, measured from where the
     partner rule already put it - that rule pushes an idle hand away from its own partner, i.e. toward the
     other pianist).
@@ -564,21 +561,11 @@ Detailed design notes, kept up to date as features were added. Start with `CLAUD
     octaves, 38 s): one pair - 75 notes never pressed, 115 tip frames off their key, 200-246 jolts/min; two pairs
     sharing - 0, 0, 0; closest the two pianists' hands come: 26 mm. Ember Fountain with 2 / 3 pairs: 0 never
     pressed, 0 off; the pianists' hands within 15 mm in 4 of 4720 frames.
-  - Shared music is always heard (`video_style.extra_heard`); each pair's notes keep the `extra_hue` turn.
   - Keeping apart is optional (2026-10-11, style `hands_apart`, off by default: the user wanted the pianists'
     hands free to collide). Off, `split_among(apart=False)` drops the `SHARE_GAP` rule and the pianists aren't
     seated side by side (no `neighbour` clearance). Four-part test: still 0 notes never pressed; the facing
     hands within 15 mm in 456 of 1302 frames (closest 1 mm) against 0 (26 mm) when kept apart. Rush E with
     4 pairs: 60% of notes played either way.
-- **Hands appear one at a time** (2026-10-11; style `hands_enter`, `hands_enter_gap`). `video_style.entrances`:
-  each hand slides in over `ENTER_T` (0.8 s), done `ENTER_READY_T` (0.3 s) before its first strike, in the order
-  the hands first play; the next starts at least `hands_enter_gap` after the one before has arrived, so hands
-  that start together come in one by one ahead of the music, and a pianist who joins later comes in just before
-  their part. `enter_lead` lengthens the video's opening (export `lead`, normally `LEAD_IN_T` 3 s) to fit every
-  entrance. In Blender (`hands_rig.entrance_at`): before its entrance a hand's bones are scaled to `HIDDEN_SCALE`
-  (collapsed - one mesh holds both hands of a pair, so object visibility can't hide one); during it all its
-  points are offset by `ENTER_FROM` (0.45 m toward the player, 0.12 m down) times a smootherstep that eases to 0.
-  The keys, notes, lights and camera use the export's own points and are untouched.
 - **Top travel speed** (2026-09-28; pianist `max_speed`, default 3.0 m/s, 0.5–5): no part of a hand - wrist or
   fingertip - travels faster, and what is heard is what the hands then play.
   - Model (`fingering.travel_time`): moves ease in and out like the animation's smootherstep, whose peak is 1.875× the
@@ -607,166 +594,6 @@ Detailed design notes, kept up to date as features were added. Start with `CLAUD
     156 notes changed hands and 337 fingers; the bundled MIDIs are unchanged. Loading: split 0.8 → 1.2 s (beam 32),
     plan unchanged; ~1.4 ms per hand per frame (demo), cold seek ~60-100 ms.
 - Checks: Hanon off-key ≈ 0.1%. Presto Chopin RH ≈ 10% off-centre frames: an animation speed limit, not fingering.
-
-## 3D renderer (export3d.py, render_video.py, blender/) - added 2026-10-10
-- The 3D video reuses the 2D animation unchanged: `HandAnimator.pose` already returns 3D points. `export3d.py`
-  solves on a large virtual keyboard (100 px per white key, so key-rect rounding is negligible), samples
-  `pose()["struct"]` per frame (27 points per hand: thumb CMC..tip, fingers 2-5 base..tip, wrist sides, forearm
-  end) and converts to metres: x from the lowest key's left edge, y away from the player from the keys' front,
-  z up from the white tops. It also writes the keyboard, the performance (press/release, finger) and pedals.
-- Black keys: the 2D keyboard is flat. `HandAnimator.black_rise_in` (default 0; the export sets 0.5 in) raises a
-  fingertip over a black key's top by that much (`_over_black`: eased in over `BLACK_RISE_EDGE_IN` at its sides
-  and front, fading out by `BLACK_RISE_FADE_IN` of tip height so arcs in the air keep their shape). Only the tips
-  move; the hand solver doesn't know about it, the finger chain just bends less.
-- Keys follow the fingertips: a key goes down by how far its finger's tip is below the key's top (to `travel`),
-  rotated about a pivot `PIVOT_BACK` behind the key so the drop at the fingertip's depth is exact. Notes without
-  a finger use the press/release times. Pressed keys and their glow take the hand's colour (object colour, alpha =
-  how far down).
-- Falling notes: one mesh on a vertical wall behind the keys, scrolled down at `NOTE_SPEED`; the shader cuts them
-  off at the nameboard (`HIT_Z`), fades them in at the top, and brightens a note while it crosses the hit line
-  (per-vertex `lo`/`hi` against the object's z).
-- Hands: MakeHuman (MPFB 2.0.18, CC0 assets, `callharvey3d_midtoned_female` skin, default rig), cut to forearms
-  and hands by `make_hands.py`. `hands_rig.py` unparents the forearm/hand bones and places each one on its two
-  exported joints: rotation = (exported segment frame) x (rig rest segment frame)^T, frames built from the segment
-  direction and the knuckle line (thumb: the back-of-palm normal); stretch along the bone to span the joints
-  exactly; the whole hand scaled to the exported knuckle width (1.037 for the default pianist). Measured on the
-  deformed mesh (demo, 97 pressed notes): lowest fingertip vertex vs the pressed key's surface -0.9..+0.6 mm,
-  median -0.1, after `TIP_LIFT` (thumb's last joints +5.5 mm - it plays on its side; little finger +1.4 mm).
-- Setup (once): install the MPFB extension and unzip `makehuman_system_assets_cc0.zip` and `skins01_cc0.zip`
-  into MPFB's user data folder (a private profile via `BLENDER_USER_RESOURCES` keeps your own Blender clean),
-  then `blender -b -P blender/make_hands.py`. FluidSynth and `MuseScore_General.sf2` go in `blender/assets/`
-  (or set `FLUIDSYNTH` / `SOUNDFONT`). `blender/assets/` is git-ignored (third-party data).
-- Cost: Eevee, 1080p, 64 samples, ray tracing and motion blur: ~2 s per frame; `--preview` (half size, 16 samples)
-  ~0.35 s. Export ~7 ms per frame for both hands. Renders resume (existing frames are kept).
-
-## 3D video styles and the studio (video_style.py, video_studio.py, studio/) - added 2026-10-10
-- A style is a flat dict over `video_style.SETTINGS` (`resolve` fills defaults); presets in `PRESETS`. Everything in
-  `blender/scene.py` reads it: note layout (`layout`: "floor" = a flat runway toward the keys, seen from the
-  "bird" camera; "wall" = upright behind the keys, "pianist" camera), colours per mode (`note_color`, stored per
-  vertex as `col`), the note shader (glow, gradient, play glow/flash, rim, opacity, `fire`: 4D noise through a
-  black-body ramp, its time from a keyframed Value node), sparks (points drawn once in Python, moved by geometry
-  nodes from the scene frame: drag, pull, wander, flicker, streaks), glow cards or flames over pressed keys, a
-  light per hand over its pressed keys and a wide one for the notes about to arrive (`note_lights`), lane/bar
-  lines, finger numbers (geometry-node instances of text meshes), haze, bloom/vignette, exposure, AgX look.
-- Speed (RTX 4060, 1080p, Ember Fountain scene): a ~1 s floor per frame whatever the samples (Blender's per-frame
-  sync and the hands, transparent notes, post). The compositor on the CPU added ~0.5 s - it now runs on the GPU
-  (`compositor_device`). Measured: balanced 1.16 s, fast 0.83 s, flat (Workbench, `blender/flat.py`) 0.39 s at
-  720p. Workbench ignores shaders, so `flat.py` clips notes with geometry nodes (squashed onto the hit line, then
-  tucked below/behind it) and gives each note colour a plain material.
-- Blenders side by side (2026-10-12): that floor is per process, so `render_video.py --workers N` (default 2;
-  Fallboard's "At once") starts N Blenders, each building the scene and rendering an equal share of the frames
-  still missing (`frame_ranges`: a run from its first missing frame to its last, at least `MIN_WORKER_FRAMES`
-  each, so clips stay on one); the first writes `--pressed`. One failing stops the others. The page's estimate
-  divides by a guessed gain (`WORKER_GAIN`: 1.6 for 2, 1.9 for 3) until it's measured on a GPU.
-- Later additions (2026-10-10): the red felt strip behind the keys is off by default (`felt_strip`); a glow line on
-  the hit line (`hit_line*`), one segment per key, coloured and flared from the key's colour curves like the glow
-  cards; on the runway the notes end `hit_gap` behind the keys (was a fixed 2 cm). Keyboard colours and case gloss,
-  hands shown/tinted (`tint_skin` multiplies inside MPFB's skin group), camera framing (distance, zoom, tilt,
-  turn, slide) and a still camera by default (`cam_follow` off). Titles fade in front of the camera, timed from
-  the export's `video_t0` in song time so a preview frame shows one only in the opening. Loud notes brighter
-  (`velocity_glow`, per-vertex `vel`). Audio: gain, reverb level and room size go to FluidSynth.
-- Flat mode cuts notes at the line instead of squashing them: only a note whose far end (`hi`) has passed the
-  line is tucked away; one still crossing it has just its passed vertices held on the line.
-- More (2026-10-11): extra pairs of hands (`extra_hands`): `export3d.Export(path, clones)` solves the song again
-  transposed by each shift (`video_style.clone_shifts`: +1, -1, +2 ... octaves) and labels those hands "R2"/"L2",
-  ...; `hands_rig.build` loads a fresh copy of the asset per pair; their notes' colours turn round the hue circle
-  (`extra_hue`); `extra_heard` keeps them out of the audio. Frame shapes: a 9:16 or 1:1 `--res` fits the frame's
-  height (sensor fit AUTO), comes 10% closer and follows the hands. Camera intro moves (fly / zoom / swing, eased
-  from the video's start) and drift are sampled into keyframes (`build_camera`). Floating dust reuses the spark
-  geometry nodes (`_spark_nodes(drag, pull, stretch, wander)`). Outline notes are a Wireframe modifier. End text
-  times from `video_t1`. The arm mesh is carried on `FOREARM_EXTEND` past the asset's cut at the elbow
-  (`hands_rig.extend_forearms`, rigid with the upper forearm bone) so the cut stays out of wide and upright
-  frames; stretching that bone instead pulled the skin at the wrist into the hand.
-- Wrists (2026-10-11): the palm and forearm are rigid round the wrist in the rig's own proportions - the
-  metacarpals' and thumb's roots (`PALM_ROOTS`) where the rig has them in the palm (the exported ones sat further
-  forward and higher and dragged the wrist into a lump), the forearm bones where the rig has them relative to
-  the wrist (they don't end exactly at it), and the lower forearm bone taking `WRIST_BLEND` of the palm's turn so
-  the bend runs into the hand. Fingers from the knuckles on are still placed on the exported joints (contact
-  unchanged: -0.9..+0.6 mm). The glow line is steady and 0.4 mm by default (taking note colours / flaring are
-  options, off); the light for notes about to arrive is aimed level, as aimed down it lit a band of floor that
-  read as a translucent bar. Glossy runway (`runway_gloss`) reflects notes only with ray tracing.
-- Only pressed notes (`only_pressed`, on by default): a note is drawn (with its sparks and light) only if its
-  finger gets the key at least `export3d.PRESSED_DOWN` (40%) down. A full render decides from its own key motion
-  (`Scene._decide_shown`, the deepest the key gets while the note is held, for strikes inside the export);
-  previews use `Export.pressed_map()` (a pose just after each strike, or halfway through: ~40 ms a note, ~50 s
-  for 1249 notes), worked out in the background by the server and passed as each note's "pressed". New Ember
-  Fountain: 15 (map) / 14 (render) of 1249 notes not pressed. With `only_pressed` a note not pressed
-  isn't heard either (2026-10-12; off, every note is drawn and heard): `render3d.py --pressed` writes
-  `Scene.pressed`, and `render_video.py` renders the frames first, then the audio from the pressed notes only
-  (`performance_midi(..., pressed)`).
-  The `audio_source` "file" choice still plays every note in the MIDI file. FluidSynth runs with
-  `render_video.POLYPHONY` (16384) voices: its default 256 dropped 3938 notes of 30 s of Rush E with four
-  pianists (10.9k notes heard, pedalled), 4096 still 2018, 16384 none.
-- Played lengths (`played_lengths`, on by default, 2026-10-11): a note is drawn (and lights the runway, carries
-  its finger number) from its finger's strike to its release (`press` / `release`, the hands' performance), not
-  the MIDI file's `start` / `end` (`Scene.span`). The hands let go early to reach the next notes or cross
-  (hands.py), and drawn at the file's length a note stayed on screen after its key came up, which read as the
-  hands not holding the notes. Ember Fountain: 259 of 1249 notes released >0.1 s before their written end, 31
-  by >0.5 s (482 s of drawn note time against 389 s held); 150 of 150 sampled notes keep their key >=40% down
-  from strike to release. The pedal still sustains the sound.
-- Sparks follow velocity as the glow does (2026-10-11): a note throws x(1 + `velocity_glow`·(1.6·vel/127 − 0.8))
-  sparks (was a fixed x(0.5 + vel/127)). Embers toned down after "I need a welding mask": sparks 26 -> 12, trickle
-  18 -> 6 per s, spark glow 14 -> 8, `velocity_glow` 0.4 -> 0.8 (loud and soft notes look clearly different).
-- The studio page: settings | preview | render and videos side by side from 1450 px wide (the last column drops
-  under the preview below that, everything stacks below 960 px). Settings search and "changed only", undo/redo, a
-  change count on each tab, a ↺ on each changed setting, typed slider values (in the shown units, clamped to the
-  range), and a Reset menu: the open tab, every edit (both back to the picked style), or "Start over" (Embers and
-  the HTML's default preview/render options; its undo step also keeps those options, `snapshot(true)`). A
-  note-density timeline (per hand; render range shaded; click to seek), 3 s preview clips (`Clips`: render_video
-  at preview quality, ~90 s), frame shape, a render queue (`Render.submit`), keyboard shortcuts, progress in the
-  tab title and a pill in the top bar. Styles import from a .json (Import… beside Save as…, or dropped anywhere on
-  the page: `importStyle`; a dropped .mid/.midi is added as a song, `addMidi`) and export from the ⋯ menu; a file
-  is `{"name", "style"}` or a bare style, and settings it leaves out take their defaults.
-- Preview history: each frame is saved with a `preview_<id>.json` beside it (time, song, style, shape, quality),
-  so the history survives a reload (`GET /api/previews?song=`, newest `KEEP_PREVIEWS` = 60 kept). Ids are tenths
-  of a second since 2026 (`first_id`), so they keep growing across server restarts. Deleting (a thumbnail's ✕,
-  Delete on the shown frame, "Delete all") hides the frames at once and removes the files 7 s later
-  (`POST /api/previews/delete`) unless Undo is pressed; a page closed meanwhile sends the delete as a beacon.
-  Double-click a thumbnail or press F for a full-size view.
-- Sculpted hands (2026-10-11, now the default; `hand_model` "makehuman" keeps the old ones): the forearms and
-  hands of the "realistic male" body in Blender Studio's Human Base Meshes v1.4.1 (CC0; download from
-  mirror.blender.org, then `blender -b --disable-autoexec -P blender/make_hands_sculpted.py -- BUNDLE.blend`).
-  Its face sets split each finger into proximal / middle / distal / nail and give the palm and forearm, so joints
-  are the borders between segments (centroid of the shared vertices) - except the knuckles: the palm/finger border
-  is the web, and the real joints (the metacarpal heads, the bumps on the back of the hand) are `KNUCKLE_BACK`
-  11-13 mm behind it, halfway through the hand's thickness (measured on the sculpt's dorsal profile). With the
-  joint at the web the fingers bent in the wrong place and their first bone was 1.34-1.51x stretched to the
-  export's; at the knuckles the sculpt's finger lengths match the export's (1.01 overall) and so do its
-  wrist-to-knuckle distances (within 1-6 mm). The metacarpals' wrist ends, the thumb's root (near the wrist - its
-  skin region's border is out in the palm and folded it) and the bone rolls come from the MakeHuman rig fitted on
-  (Umeyama similarity on webs, fingertips, wrist, thumb: scale 0.993). Same bone names as MakeHuman.
-  Weights: bone heat, smoothed (6 passes, half toward the neighbours' average) for the palm, wrist and arm; the
-  fingers' own from their joints (`finger_weights`): across each joint (a plane halfway between the two bones'
-  directions) the weight passes to the next bone over +-4 mm (PIP), +-3 mm (DIP), +-9 mm (knuckle), so segments
-  stay firm and bend at their joints instead of along the whole finger; palm vertices round the knuckles are
-  shared between the nearest fingers by their sideways distance from each finger's axis (Gaussian, 7 mm), so the
-  webs follow both neighbours. Modifiers Armature -> Corrective Smooth (vertex group "relax": 1 on the palm and arm,
-  0.3 on the fingers) -> Multires (3 levels): the bones move the ~2000 base vertices and the sculpted detail is
-  laid on afterwards - 1.05 s a frame at balanced 1080p (1.09 before the anatomy work). Procedural skin glued to
-  the rest shape (a "rest" vertex attribute): tone, blotches and paler flecks, crease darkening (AO), pores and
-  fine lines in the bump, subsurface scattering, sheen; nails (the face sets) a glossy pinkish material.
-- Posing the sculpted hands (`hands_rig.SOLVED`): no bone is stretched to the export's joints. The palm, knuckles
-  included, is rigid in the sculpt's proportions round the exported wrist; the hand is scaled by the fingers'
-  bone lengths (`hand_scale`, not the knuckle width, which the knuckles' move changed). Each finger is solved
-  (`solve_finger`, as `hands.solve_chain`): three bones from the knuckle to the exported tip, bending in the
-  exported finger's plane, the last joint bending the same share of the middle one as in the export. A finger
-  held above the keys keeps the curve it would have resting on the key under it (`surface`) and is lifted at the
-  knuckle, its tip on the line from the knuckle to the exported one: the export raises a tip toward the knuckle,
-  and bending the finger to follow curled it into a claw (pressing fingers already sit at ~84% of full reach).
-  The export's thumb is longer than the sculpt's and was out of reach 61% of the time. It used to be lengthened by
-  up to 1.15 (and thickened), which viewers found freakishly long; now it keeps the sculpt's size and the whole
-  hand (wrist, palm, knuckles, forearm) moves toward the thumb's tip by what it lacks to reach it at
-  `THUMB_REACH` (98%) of its length, at most `THUMB_SHIFT_MAX` (2.5 cm) (`thumb_shift`; the fingers, solved from
-  the knuckles, bend a little more). Simulated on Ember Fountain with a stand-in thumb calibrated to the 61%
-  (2026-10-11): the hand moves in 68% (right) / 87% (left) of frames, median 4-5 mm, at most 9 mm; the thumb
-  always reaches; fingers out of reach 0.01%. The build prints the real figures. Out of reach, a finger straightens and stretches
-  (demo song: 1-4% of finger positions, at most 1.06; the build prints it). Contact after the tip-only
-  `TIP_LIFTS["sculpted"]` (fingers 2.7-3.0 mm, the thumb on its side 7.9 mm): -0.8..+0.3 mm, median -0.1.
-- The studio server is stdlib only (`ThreadingHTTPServer` on 127.0.0.1). Previews: the song is solved once per
-  file (`export3d.Export`, ~0.7 s; a 0.6 s window ~0.6 s) and a Blender stays open (`preview_worker.py`, jobs on
-  stdin, `@@DONE`), which keeps compiled shaders: ~7 s fast / ~2 s flat per preview while another render ran,
-  against ~17 s (alone) with a fresh Blender each time. Videos run `render_video.py` as a child; its `@stage` /
-  `@frames` lines and the count of frames written give the progress and time left.
 
 ## Tests
 - `pytest` from the repository root (`pip install -r requirements-dev.txt` first).

@@ -21,14 +21,6 @@ python main.py [song.mid] [--edit] [--no-sound] [--speed X] [--screenshot out.pn
 `--screenshot` renders one frame and exits - useful for checking visual changes without a
 window (combine with `SDL_VIDEODRIVER=dummy`).
 
-3D video (Blender 5.1, realistic hands, falling notes, audio) - see "3D renderer" in
-`docs/ARCHITECTURE.md` for the one-time asset setup:
-
-```bash
-python video_studio.py      # Fallboard, the 3D video studio in the browser (also: main menu "Fallboard", key V)
-python render_video.py song.mid [out.mp4] [--style Embers] [--quality flat|fast|balanced|high|max] [--fps 30] [--start S --end S]
-```
-
 ## Test
 
 ```bash
@@ -57,11 +49,6 @@ gestures, editor state after scripted keys). Keep tests fast and free of local d
 | `editor.py` | Fingering editor (piano roll, context menus, undo, sequential mode, difficulty, export) |
 | `version.py` | `VERSION`: the latest commit's UTC time as `v20YY.MM.DD.HHMM` (from git, or filled in by `git archive`); shown in the window title and bottom-left corner |
 | `pig_eval.py`, `learn_weights.py` | PIG benchmark and weight tuning (need the dataset locally) |
-| `export3d.py` | Samples both hands' 3D skeletons per frame (metres, black keys raised) with the keyboard and the performance, as JSON for Blender |
-| `render_video.py` | 3D video pipeline: export, Blender frames, performance MIDI (the notes the fingers press) -> FluidSynth WAV, ffmpeg |
-| `video_style.py` | The 3D video's look: `SETTINGS` (notes, colours, look, effects, scene, finish), `PRESETS` (Classic, Embers, Neon, ...), note colours, saved styles in `video_styles/` |
-| `video_studio.py`, `studio/` | Fallboard, the 3D video studio: a local server (127.0.0.1:8765, stdlib only) and its page - edit a style, preview frames (a Blender kept open, `blender/preview_worker.py`), render videos with progress |
-| `blender/` | Run inside Blender: `render3d.py` (entry; `run(argv)`), `scene.py` (keyboard, key motion, notes on a wall or a flat runway, sparks, glow, lights, camera), `flat.py` (Workbench test renders), `hands_rig.py` (skinned hands posed on the export), `hands_stick.py` (stick-figure check), `make_hands.py` (builds `assets/hands.blend` with MPFB), `make_hands_sculpted.py` (builds `assets/hands_sculpted.blend`, the default hands, from Blender Studio's Human Base Meshes), `preview_worker.py` |
 
 ## Conventions and gotchas
 

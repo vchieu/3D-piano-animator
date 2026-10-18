@@ -36,8 +36,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import subprocess
-import sys
 
 import pygame
 
@@ -309,8 +307,6 @@ class MainMenu:
                    sub="Open a MIDI file, fine-tune its fingering and export it"),
             Button("Pianists & hands", "pianists", font="button", key_hint="H",
                    sub="Create pianists: hand anatomy, colour and technique; choose the active one"),
-            Button("Fallboard (3D videos)", "studio3d", font="button", key_hint="V",
-                   sub="Style the falling notes and render a 3D video with realistic hands (in your browser)"),
             Button("Quit", "quit", font="normal", key_hint="Esc"),
         ]
         self.layout(app.screen.get_size())
@@ -321,10 +317,10 @@ class MainMenu:
         bw = min(560, w - 80)
         bh = max(56, min(84, int(h * 0.09)))
         y = int(h * 0.25)
-        for b in self.buttons[:4]:
+        for b in self.buttons[:3]:
             b.rect = pygame.Rect((w - bw) // 2, y, bw, bh)
             y += bh + 14
-        self.buttons[4].rect = pygame.Rect((w - 160) // 2, y + 4, 160, 40)
+        self.buttons[3].rect = pygame.Rect((w - 160) // 2, y + 4, 160, 40)
         self._active_y = y + 60
 
     def handle_event(self, event):
@@ -343,8 +339,6 @@ class MainMenu:
                 return self._do("edit")
             if event.key in (pygame.K_h, pygame.K_3):
                 return self._do("pianists")
-            if event.key in (pygame.K_v, pygame.K_4):
-                return self._do("studio3d")
         elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             for b in self.buttons:
                 if b.hit(event.pos):
@@ -356,13 +350,6 @@ class MainMenu:
             return False
         if action == "pianists":
             self.app.studio()
-            return True
-        if action == "studio3d":
-            # a separate program (video_studio.py) that opens in the browser; it stays
-            # open when this window closes, and a second start just reopens the page
-            subprocess.Popen([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                                           "video_studio.py")])
-            self.message = "Opening Fallboard in your browser…"
             return True
         path = pick_file("Open MIDI file" if action == "play" else "Open MIDI file to edit",
                          initialdir=self.app.last_dir)

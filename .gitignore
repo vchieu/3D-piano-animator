@@ -23,11 +23,7 @@ PDFs/
 Hand Skin References/
 MIDIs/*
 !MIDIs/demo_song.mid
-# 3D renderer: built hand asset (MakeHuman/MPFB), soundfont, FluidSynth, renders
-blender/assets/
 Renders/
-# your own 3D video styles (saved from the 3D Video Studio)
-video_styles/
 !MIDIs/right_hand_test.mid
 !MIDIs/right_hand_octaves_test.mid
 
